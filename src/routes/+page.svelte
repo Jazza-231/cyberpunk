@@ -30,9 +30,8 @@
 		img.src = src;
 		imageCache.set(src, img);
 
-		// Instead of a hack, trigger a redraw when any image loads.
+		// Trigger redraw when any image loads.
 		img.onload = () => {
-			// Only redraw if this image is likely visible (i.e. at the active level).
 			drawCanvas(zoom, activeLevel);
 		};
 		return img;
@@ -146,7 +145,8 @@
 		ctx.fillText(i.toString(), dx + 5, dy + 5);
 	}
 
-	// Draw the canvas with tiles from activeLevel, only drawing visible ones.
+	// Draw the canvas.
+	// First draw a fallback lower-res layer (if available), then overlay the active level.
 	function drawCanvas(z: number, level: number) {
 		const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 		if (!canvas) return;
@@ -155,6 +155,21 @@
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+		// Fallback: draw one level lower if it exists.
+		if (level > 0) {
+			const fallbackLevel = level - 1;
+			const fallbackIndices = getVisibleTileIndices(fallbackLevel, z, panX, panY);
+			fallbackIndices.forEach((i) => {
+				const src = levelImages[fallbackLevel][i];
+				const image = getImage(src);
+				if (image.complete) {
+					drawTile(ctx, image, i, fallbackLevel, z);
+				}
+			});
+		}
+
+		// Now draw the active level on top.
 		const indices = getVisibleTileIndices(level, z, panX, panY);
 		indices.forEach((i) => {
 			const src = levelImages[level][i];
@@ -245,7 +260,6 @@
 			const newZoom = Math.max(0.1, initialZoom * pinchRatio);
 			// Calculate new center and adjust pan so that the midpoint remains fixed.
 			const currentMidpoint = getMidpoint(pointers[0], pointers[1]);
-			// World coordinates of initial pinch center.
 			const wx = (initialPinchCenter.x - initPanXForPinch) / initialZoom;
 			const wy = (initialPinchCenter.y - initPanYForPinch) / initialZoom;
 			panX = currentMidpoint.x - wx * newZoom;
@@ -253,8 +267,10 @@
 			zoom = newZoom;
 		} else if (activePointers.size === 1 && isPanning) {
 			// Single pointer panning.
-			const dx = e.clientX - panStartX;
-			const dy = e.clientY - panStartY;
+			// Increase sensitivity for touch devices.
+			const sensitivity = e.pointerType === "touch" ? 1.5 : 1;
+			const dx = (e.clientX - panStartX) * sensitivity;
+			const dy = (e.clientY - panStartY) * sensitivity;
 			panX = initPanX + dx;
 			panY = initPanY + dy;
 		}
@@ -293,10 +309,8 @@
 		const zoomFactor = 1 - e.deltaY * 0.001;
 		const newZoom = Math.max(0.1, oldZoom * zoomFactor);
 
-		// Compute world coordinates at the pointer.
 		const wx = (pointerX - panX) / oldZoom;
 		const wy = (pointerY - panY) / oldZoom;
-		// Update pan so the pointer remains fixed.
 		panX = pointerX - wx * newZoom;
 		panY = pointerY - wy * newZoom;
 		zoom = newZoom;
@@ -344,7 +358,10 @@
 		margin: 0;
 		overflow: hidden;
 	}
-
+	/* Prevent the browser’s default pinch-to-zoom on touch devices */
+	canvas {
+		touch-action: none;
+	}
 	main {
 		display: flex;
 		justify-content: center;
