@@ -14,7 +14,7 @@
 		for (let i = 0; i < levels; i++) {
 			images.push([]);
 			for (let j = 0; j < 4 ** i; j++) {
-				images[i].push(`src/lib/levels/${i}/${j}.webp`);
+				images[i].push(`/levels/${i}/${j}.webp`);
 			}
 		}
 		return images;

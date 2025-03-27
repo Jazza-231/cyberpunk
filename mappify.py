@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 Image.MAX_IMAGE_PIXELS = None
 
 input_path = r"C:\Users\green\Downloads\final_stitched_image_cropped.png"
-output_path = r"C:\Users\green\OneDrive\Documents\Code shit\cyberpunk\src\lib\levels"
+output_path = r"C:\Users\green\OneDrive\Documents\Code shit\cyberpunk\static\levels"
 
 print("Loading image into memory...")
 img = Image.open(input_path)
