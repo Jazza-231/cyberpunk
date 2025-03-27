@@ -1,12 +1,14 @@
 <script lang="ts">
-	const levels = 6;
+	// Use window.innerWidth/Height for responsiveness.
+	// svelte-ignore non_reactive_update
+	let canvasSize = { width: window.innerWidth - 100, height: window.innerHeight - 100 };
 	const imageSize = { width: 1600, height: 1486 };
-	const canvasSize = { width: screen.width - 100, height: screen.height - 100 };
-	// The full map dimensions at zoom 1.
-	const imageScaledSize = {
+	let imageScaledSize = {
 		width: canvasSize.width,
 		height: Math.floor(imageSize.height / (imageSize.width / canvasSize.width)),
 	};
+
+	const levels = 6;
 
 	// Build a 2D array of image paths.
 	const levelImages = (() => {
@@ -28,19 +30,16 @@
 		img.src = src;
 		imageCache.set(src, img);
 
-		if (src.includes("/0/0.")) {
-			img.onload = () => {
-				// Jank way to make the initial image render without user input
-				zoom += 1;
-				zoom -= 1;
-			};
-		}
+		// Instead of a hack, trigger a redraw when any image loads.
+		img.onload = () => {
+			// Only redraw if this image is likely visible (i.e. at the active level).
+			drawCanvas(zoom, activeLevel);
+		};
 		return img;
 	}
 
-	// Zoom state.
+	// Zoom and pan state.
 	let zoom = $state(1);
-	// Pan offset: start centered.
 	let panX = $state((canvasSize.width - imageScaledSize.width) / 2);
 	let panY = $state((canvasSize.height - imageScaledSize.height) / 2);
 
@@ -52,7 +51,6 @@
 	// When desiredLevel changes, record its timestamp.
 	let desiredLevelTimestamp = Date.now();
 	$effect(() => {
-		// Track desiredLevel changes.
 		desiredLevel;
 		desiredLevelTimestamp = Date.now();
 	});
@@ -176,7 +174,114 @@
 		drawCanvas(zoom, activeLevel);
 	});
 
-	// Zoom on wheel events: zooming around the cursor.
+	// --- Pointer and Touch / Pinch Zoom Support ---
+	let activePointers = new Map<number, { clientX: number; clientY: number }>();
+	let isPinching = false;
+	let initialPinchDistance = 0;
+	// svelte-ignore state_referenced_locally
+	let initialZoom = zoom;
+	let initialPinchCenter = { x: 0, y: 0 };
+	// svelte-ignore state_referenced_locally
+	let initPanXForPinch = panX;
+	// svelte-ignore state_referenced_locally
+	let initPanYForPinch = panY;
+	let isPanning = false;
+	let panStartX = 0;
+	let panStartY = 0;
+	let initPanX = 0;
+	let initPanY = 0;
+
+	function getMidpoint(
+		p1: { clientX: number; clientY: number },
+		p2: { clientX: number; clientY: number },
+	) {
+		return {
+			x: (p1.clientX + p2.clientX) / 2,
+			y: (p1.clientY + p2.clientY) / 2,
+		};
+	}
+
+	function getDistance(
+		p1: { clientX: number; clientY: number },
+		p2: { clientX: number; clientY: number },
+	) {
+		return Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+	}
+
+	function handlePointerDown(e: PointerEvent) {
+		activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+		const canvas = e.currentTarget as HTMLCanvasElement;
+		canvas.setPointerCapture(e.pointerId);
+		if (activePointers.size === 1) {
+			// Single pointer: start panning.
+			isPanning = true;
+			panStartX = e.clientX;
+			panStartY = e.clientY;
+			initPanX = panX;
+			initPanY = panY;
+			canvas.style.cursor = "grabbing";
+		} else if (activePointers.size === 2) {
+			// Two pointers: start pinch zoom.
+			isPinching = true;
+			isPanning = false;
+			const pointers = Array.from(activePointers.values());
+			initialPinchDistance = getDistance(pointers[0], pointers[1]);
+			initialZoom = zoom;
+			initialPinchCenter = getMidpoint(pointers[0], pointers[1]);
+			initPanXForPinch = panX;
+			initPanYForPinch = panY;
+		}
+	}
+
+	function handlePointerMove(e: PointerEvent) {
+		if (!activePointers.has(e.pointerId)) return;
+		activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+		const canvas = e.currentTarget as HTMLCanvasElement;
+		if (activePointers.size === 2) {
+			// Handle pinch zoom.
+			const pointers = Array.from(activePointers.values());
+			const currentDistance = getDistance(pointers[0], pointers[1]);
+			const pinchRatio = currentDistance / initialPinchDistance;
+			const newZoom = Math.max(0.1, initialZoom * pinchRatio);
+			// Calculate new center and adjust pan so that the midpoint remains fixed.
+			const currentMidpoint = getMidpoint(pointers[0], pointers[1]);
+			// World coordinates of initial pinch center.
+			const wx = (initialPinchCenter.x - initPanXForPinch) / initialZoom;
+			const wy = (initialPinchCenter.y - initPanYForPinch) / initialZoom;
+			panX = currentMidpoint.x - wx * newZoom;
+			panY = currentMidpoint.y - wy * newZoom;
+			zoom = newZoom;
+		} else if (activePointers.size === 1 && isPanning) {
+			// Single pointer panning.
+			const dx = e.clientX - panStartX;
+			const dy = e.clientY - panStartY;
+			panX = initPanX + dx;
+			panY = initPanY + dy;
+		}
+	}
+
+	function handlePointerUp(e: PointerEvent) {
+		activePointers.delete(e.pointerId);
+		const canvas = e.currentTarget as HTMLCanvasElement;
+		canvas.releasePointerCapture(e.pointerId);
+		if (activePointers.size < 2) {
+			isPinching = false;
+			if (activePointers.size === 0) {
+				isPanning = false;
+				canvas.style.cursor = "grab";
+			} else {
+				// If one pointer remains, restart panning.
+				const remaining = activePointers.values().next().value;
+				if (!remaining) return;
+				isPanning = true;
+				panStartX = remaining.clientX;
+				panStartY = remaining.clientY;
+				initPanX = panX;
+				initPanY = panY;
+			}
+		}
+	}
+
 	function handleWheel(e: WheelEvent) {
 		e.preventDefault();
 		const canvas = e.currentTarget as HTMLCanvasElement;
@@ -185,7 +290,7 @@
 		const pointerY = e.clientY - rect.top;
 
 		const oldZoom = zoom;
-		const zoomFactor = 1 - e.deltaY * 0.001; // Adjust sensitivity.
+		const zoomFactor = 1 - e.deltaY * 0.001;
 		const newZoom = Math.max(0.1, oldZoom * zoomFactor);
 
 		// Compute world coordinates at the pointer.
@@ -197,35 +302,7 @@
 		zoom = newZoom;
 	}
 
-	// Panning logic.
-	let isPanning = false;
-	let panStartX = 0;
-	let panStartY = 0;
-	let initPanX = 0;
-	let initPanY = 0;
-	function handlePointerDown(e: PointerEvent) {
-		isPanning = true;
-		panStartX = e.clientX;
-		panStartY = e.clientY;
-		initPanX = panX;
-		initPanY = panY;
-		(e.target as HTMLElement).style.cursor = "grabbing";
-		(e.target as HTMLElement).setPointerCapture(e.pointerId);
-	}
-	function handlePointerMove(e: PointerEvent) {
-		if (!isPanning) return;
-		const dx = e.clientX - panStartX;
-		const dy = e.clientY - panStartY;
-		panX = initPanX + dx;
-		panY = initPanY + dy;
-	}
-	function handlePointerUp(e: PointerEvent) {
-		isPanning = false;
-		(e.target as HTMLElement).style.cursor = "grab";
-		(e.target as HTMLElement).releasePointerCapture(e.pointerId);
-	}
-
-	// Attach event listeners on mount.
+	// Attach event listeners and handle window resize.
 	$effect(() => {
 		const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 		if (!canvas) return;
@@ -235,12 +312,24 @@
 		canvas.addEventListener("pointermove", handlePointerMove);
 		canvas.addEventListener("pointerup", handlePointerUp);
 		canvas.addEventListener("pointercancel", handlePointerUp);
+
+		const handleResize = () => {
+			canvasSize = { width: window.innerWidth - 100, height: window.innerHeight - 100 };
+			imageScaledSize = {
+				width: canvasSize.width,
+				height: Math.floor(imageSize.height / (imageSize.width / canvasSize.width)),
+			};
+			drawCanvas(zoom, activeLevel);
+		};
+		window.addEventListener("resize", handleResize);
+
 		return () => {
 			canvas.removeEventListener("wheel", handleWheel);
 			canvas.removeEventListener("pointerdown", handlePointerDown);
 			canvas.removeEventListener("pointermove", handlePointerMove);
 			canvas.removeEventListener("pointerup", handlePointerUp);
 			canvas.removeEventListener("pointercancel", handlePointerUp);
+			window.removeEventListener("resize", handleResize);
 		};
 	});
 </script>
@@ -252,11 +341,15 @@
 <style>
 	:global(body) {
 		background-color: black;
+		margin: 0;
+		overflow: hidden;
 	}
 
 	main {
 		display: flex;
 		justify-content: center;
 		align-items: center;
+		width: 100vw;
+		height: 100vh;
 	}
 </style>
